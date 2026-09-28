@@ -84,6 +84,13 @@ label.field .lbl{display:block;font-size:12.5px;color:var(--muted);margin-bottom
 .titleblock-cell .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:2px;}
 .titleblock-cell .v{font-size:13.5px;font-weight:600;}
 
+.modo-row{display:flex;gap:10px;margin-bottom:4px;}
+.modo-card{flex:1;background:var(--surface);border:1.5px solid var(--line);border-radius:12px;padding:14px 10px;display:flex;flex-direction:column;align-items:center;gap:4px;}
+.modo-card.active{border-color:var(--blueprint);background:var(--blueprint-tint);}
+.modo-title{font-size:13.5px;font-weight:700;color:var(--ink);text-align:center;}
+.modo-count{font-size:12px;color:var(--muted);}
+.modo-card.active .modo-count{color:var(--blueprint-dark);}
+
 .tabs{display:flex;gap:6px;overflow-x:auto;padding:10px 14px 0;flex-shrink:0;background:var(--paper);}
 .tab{flex-shrink:0;padding:8px 14px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--muted);}
 .tab.active{background:var(--blueprint);color:#fff;border-color:var(--blueprint);}
@@ -104,6 +111,7 @@ label.field .lbl{display:block;font-size:12.5px;color:var(--muted);margin-bottom
 .pin[data-status="pendente"]{background:var(--pendente);}
 .pin[data-status="andamento"]{background:var(--andamento);}
 .pin[data-status="concluido"]{background:var(--concluido);}
+.pin[data-status="entrada"]{background:var(--blueprint);}
 
 .viewer-hud{position:absolute;top:calc(10px + var(--safe-top));right:10px;display:flex;flex-direction:column;gap:8px;z-index:5;}
 .hud-btn{width:38px;height:38px;border-radius:10px;background:rgba(29,36,48,.78);color:#fff;border:none;font-size:16px;display:flex;align-items:center;justify-content:center;}
@@ -215,6 +223,7 @@ table.list-table td{padding:9px 8px;border-bottom:1px solid var(--line);}
 .rep-pin-badge.status-pendente{background:var(--pendente);}
 .rep-pin-badge.status-andamento{background:var(--andamento);}
 .rep-pin-badge.status-concluido{background:var(--concluido);}
+.rep-pin-badge.status-entrada{background:var(--blueprint-dark);}
 .rep-status-label{font-size:9px;color:var(--muted);font-weight:700;}
 .rep-card-title{font-size:11.5px;font-weight:700;margin:2px 0;}
 .rep-card-meta{font-size:9px;color:var(--muted);margin:0 0 4px;}
@@ -711,6 +720,12 @@ function fmtDateTime(iso){
   if(isNaN(d)) return iso;
   return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 }
+function normalizeTipo(t){
+  return t==='entrada' ? 'entrada' : 'checklist';
+}
+function labelTipo(t){
+  return normalizeTipo(t)==='entrada' ? 'Vistoria de Entrada' : 'Checklist de Obra';
+}
 function normalizePrioridade(p){
   if(p==='baixo'||p==='medio'||p==='alto') return p;
   if(typeof p==='number') return p<=2?'baixo':(p>=4?'alto':'medio');
@@ -930,8 +945,21 @@ async function render(){
     plantaViewer:renderPlantaViewer,
     relatorio:renderRelatorioPreview,
   };
-  await fns[cur.view](cur.params);
-  qsa('[data-nav="back"]').forEach(b=>b.addEventListener('click',back));
+  try{
+    const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('Tempo esgotado ao carregar (possível bloqueio do navegador a IndexedDB/armazenamento local neste modo de abertura).')),8000));
+    await Promise.race([fns[cur.view](cur.params), timeout]);
+    qsa('[data-nav="back"]').forEach(b=>b.addEventListener('click',back));
+  }catch(err){
+    console.error(err);
+    app.innerHTML=`<div class="scroll pad" style="padding-top:40px;">
+      <div class="empty" style="padding-top:0;">
+        <div class="glyph">&#9888;&#65039;</div>
+        <p style="color:var(--pendente);font-weight:700;">Não foi possível carregar o app.</p>
+        <p style="font-size:13px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px;">${escapeHtml(err && err.message || String(err))}</p>
+        <p style="font-size:13px;">Isso costuma acontecer quando o arquivo é aberto por um link temporário (de um gerenciador de arquivos, WhatsApp, etc.), em vez de um endereço file:// ou de um site real.</p>
+      </div>
+    </div>`;
+  }
 }
 
 /* ---------- HOME ---------- */
@@ -1200,8 +1228,12 @@ async function renderObraForm(params){
 async function renderObraDetail(params){
   const obra=await dbGet('obras',params.obraId);
   if(!obra){ go('home',{}); return; }
+  const modoAtivo = normalizeTipo(params.tipo || obra.modoAtivo || 'entrada');
   const pavimentos=await dbGetAllByIndex('pavimentos','obraId',obra.id);
   pavimentos.sort((a,b)=>(a.ordem||0)-(b.ordem||0));
+  const todosItens=await dbGetAllByIndex('itens','obraId',obra.id);
+  const countTipo=(tipo)=>todosItens.filter(it=>normalizeTipo(it.tipo)===tipo).length;
+
   let pavList='';
   if(pavimentos.length===0){
     pavList=`<div class="empty">
@@ -1210,13 +1242,14 @@ async function renderObraDetail(params){
     </div>`;
   } else {
     for(const p of pavimentos){
-      const n=(await dbGetAllByIndex('itens','pavimentoId',p.id)).length;
+      const n=todosItens.filter(it=>it.pavimentoId===p.id && normalizeTipo(it.tipo)===modoAtivo).length;
       pavList+=`<div class="card card-tap" data-open-pav="${p.id}">
         <p class="card-title">${escapeHtml(p.nome)}</p>
-        <p class="card-sub">${n} item${n===1?'':'s'} de checklist</p>
+        <p class="card-sub">${n} item${n===1?'':'s'} · ${labelTipo(modoAtivo)}</p>
       </div>`;
     }
   }
+
   app.innerHTML=`
     ${topbar(obra.nome,'Detalhes da obra')}
     <div class="scroll pad">
@@ -1232,6 +1265,18 @@ async function renderObraDetail(params){
       </div>
       <button class="btn-text" id="btn-edit-obra">Editar dados da obra</button>
       <hr class="rule">
+      <p class="card-title" style="margin-bottom:10px;">O que você quer fazer nessa obra?</p>
+      <div class="modo-row">
+        <button class="modo-card ${modoAtivo==='entrada'?'active':''}" data-modo="entrada">
+          <span class="modo-title">Vistoria de Entrada</span>
+          <span class="modo-count">${countTipo('entrada')} item${countTipo('entrada')===1?'':'s'}</span>
+        </button>
+        <button class="modo-card ${modoAtivo==='checklist'?'active':''}" data-modo="checklist">
+          <span class="modo-title">Checklist de Obra</span>
+          <span class="modo-count">${countTipo('checklist')} item${countTipo('checklist')===1?'':'s'}</span>
+        </button>
+      </div>
+      <hr class="rule">
       <p class="card-title" style="margin-bottom:10px;">Pavimentos</p>
       ${pavList}
       <button class="btn btn-ghost" id="btn-add-pav">+ Adicionar pavimento</button>
@@ -1242,10 +1287,16 @@ async function renderObraDetail(params){
     </div>
   `;
   qs('#btn-edit-obra').addEventListener('click',()=>go('obraForm',{obraId:obra.id}));
-  qs('#btn-add-pav').addEventListener('click',()=>go('pavimentoForm',{obraId:obra.id}));
-  qs('#btn-relatorio').addEventListener('click',()=>go('relatorio',{obraId:obra.id}));
+  qs('#btn-add-pav').addEventListener('click',()=>go('pavimentoForm',{obraId:obra.id,tipo:modoAtivo}));
+  qs('#btn-relatorio').addEventListener('click',()=>go('relatorio',{obraId:obra.id,tipo:modoAtivo}));
   qs('#btn-export').addEventListener('click',()=>exportObra(obra.id));
-  qsa('[data-open-pav]').forEach(elm=>elm.addEventListener('click',()=>go('plantaViewer',{obraId:obra.id,pavimentoId:elm.dataset.openPav})));
+  qsa('[data-open-pav]').forEach(elm=>elm.addEventListener('click',()=>go('plantaViewer',{obraId:obra.id,pavimentoId:elm.dataset.openPav,tipo:modoAtivo})));
+  qsa('[data-modo]').forEach(btn=>btn.addEventListener('click',async ()=>{
+    if(btn.dataset.modo===modoAtivo) return;
+    obra.modoAtivo=btn.dataset.modo;
+    await dbPut('obras',obra);
+    replace('obraDetail',{obraId:obra.id,tipo:btn.dataset.modo});
+  }));
 }
 
 /* ---------- PAVIMENTO FORM ---------- */
@@ -1305,7 +1356,7 @@ async function renderPavimentoForm(params){
         criadoEm:new Date().toISOString(),
       };
       await dbPut('pavimentos',record);
-      replace('plantaViewer',{obraId:params.obraId,pavimentoId:record.id});
+      replace('plantaViewer',{obraId:params.obraId,pavimentoId:record.id,tipo:params.tipo});
     }
   });
 }
@@ -1354,6 +1405,7 @@ async function renderPavimentoCanvas(pav,targetWidth){
 
 async function renderPlantaViewer(params){
   const obra=await dbGet('obras',params.obraId);
+  const tipo=normalizeTipo(params.tipo);
   const pavimentos=await dbGetAllByIndex('pavimentos','obraId',params.obraId);
   pavimentos.sort((a,b)=>(a.ordem||0)-(b.ordem||0));
   const pav=pavimentos.find(p=>p.id===params.pavimentoId)||pavimentos[0];
@@ -1362,8 +1414,18 @@ async function renderPlantaViewer(params){
   const tabsHtml=pavimentos.map(p=>`<button class="tab ${p.id===pav.id?'active':''}" data-pav="${p.id}">${escapeHtml(p.nome)}</button>`).join('')
     + `<button class="tab-add" id="tab-add">+ pavimento</button>`;
 
+  const legendHtml = tipo==='checklist' ? `
+      <div class="legend">
+        <div class="li"><span class="dot" style="background:var(--pendente)"></span>Pendente</div>
+        <div class="li"><span class="dot" style="background:var(--andamento)"></span>Andamento</div>
+        <div class="li"><span class="dot" style="background:var(--concluido)"></span>Concluído</div>
+      </div>` : `
+      <div class="legend">
+        <div class="li"><span class="dot" style="background:var(--blueprint)"></span>Vistoria de entrada</div>
+      </div>`;
+
   app.innerHTML=`
-    ${topbar(obra.nome,pav.nome)}
+    ${topbar(obra.nome,pav.nome+' · '+labelTipo(tipo))}
     <div class="tabs">${tabsHtml}</div>
     <div class="viewer-wrap" id="viewer-wrap">
       <div class="stage" id="stage" style="--zoom:1;">
@@ -1377,17 +1439,13 @@ async function renderPlantaViewer(params){
         <button class="hud-btn" id="btn-edit-pav" title="Editar pavimento">&#9998;</button>
         <button class="hud-btn" id="btn-reset-zoom" title="Ajustar zoom">&#8635;</button>
       </div>
-      <div class="legend">
-        <div class="li"><span class="dot" style="background:var(--pendente)"></span>Pendente</div>
-        <div class="li"><span class="dot" style="background:var(--andamento)"></span>Andamento</div>
-        <div class="li"><span class="dot" style="background:var(--concluido)"></span>Concluído</div>
-      </div>
+      ${legendHtml}
     </div>
   `;
 
-  qsa('.tab[data-pav]').forEach(t=>t.addEventListener('click',()=>replace('plantaViewer',{obraId:params.obraId,pavimentoId:t.dataset.pav})));
-  qs('#tab-add').addEventListener('click',()=>go('pavimentoForm',{obraId:params.obraId}));
-  qs('#btn-list').addEventListener('click',()=>go('relatorio',{obraId:params.obraId,pavimentoId:pav.id}));
+  qsa('.tab[data-pav]').forEach(t=>t.addEventListener('click',()=>replace('plantaViewer',{obraId:params.obraId,pavimentoId:t.dataset.pav,tipo})));
+  qs('#tab-add').addEventListener('click',()=>go('pavimentoForm',{obraId:params.obraId,tipo}));
+  qs('#btn-list').addEventListener('click',()=>go('relatorio',{obraId:params.obraId,pavimentoId:pav.id,tipo}));
   qs('#btn-edit-pav').addEventListener('click',()=>go('pavimentoForm',{obraId:params.obraId,pavimentoId:pav.id}));
 
   const wrap=qs('#viewer-wrap');
@@ -1415,12 +1473,13 @@ async function renderPlantaViewer(params){
   applyTransform();
 
   async function loadPins(){
-    const itens=await dbGetAllByIndex('itens','pavimentoId',pav.id);
+    const todos=await dbGetAllByIndex('itens','pavimentoId',pav.id);
+    const itens=todos.filter(it=>normalizeTipo(it.tipo)===tipo);
     pinsLayer.innerHTML='';
     for(const it of itens){
       const pin=document.createElement('div');
       pin.className='pin';
-      pin.dataset.status=it.status;
+      pin.dataset.status= tipo==='entrada' ? 'entrada' : it.status;
       pin.dataset.itemId=it.id;
       pin.style.left=it.xPct+'%';
       pin.style.top=it.yPct+'%';
@@ -1457,7 +1516,7 @@ async function renderPlantaViewer(params){
         if(navigator.vibrate) navigator.vibrate(25);
         const pct=screenToContentPct(startX,startY);
         showGhostPin(pct.xPct,pct.yPct);
-        openPinSheet('create',null,pav,params.obraId,pct);
+        openPinSheet('create',null,pav,params.obraId,pct,null,tipo);
       },600);
     } else {
       clearTimeout(longPressTimer);
@@ -1527,10 +1586,12 @@ async function renderPlantaViewer(params){
 }
 
 /* ---------- PIN SHEET (create / edit) ---------- */
-async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
+async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange,tipoForNew){
   const wrap=qs('#viewer-wrap');
   let item=null;
   if(mode==='edit') item=await dbGet('itens',itemId);
+  const tipo = mode==='edit' ? normalizeTipo(item.tipo) : normalizeTipo(tipoForNew);
+  const fotoDepoisLabel = tipo==='entrada' ? 'Foto após resolução (opcional)' : 'Foto de comprovação (opcional)';
 
   const overlay=document.createElement('div');
   overlay.className='sheet-overlay';
@@ -1538,7 +1599,7 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
     <div class="sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-head">
-        <h2>${mode==='create'?'Novo item':'Item #'+item.numero}</h2>
+        <h2>${mode==='create'?'Novo item':'Item #'+item.numero}<span style="display:block;font-size:11.5px;font-weight:600;color:var(--muted);">${labelTipo(tipo)}</span></h2>
         <button class="icon-btn" id="sheet-close" style="background:transparent;color:var(--ink);">&#10005;</button>
       </div>
       <div class="sheet-body">
@@ -1550,6 +1611,8 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
 
         <label class="field"><span class="lbl">Ambiente</span><input type="text" id="f-ambiente" value="${escapeHtml(item?.ambiente||'')}" placeholder="Ex: Sala do diretor"></label>
         <label class="field"><span class="lbl">Tema</span><input type="text" id="f-tema" value="${escapeHtml(item?.tema||'')}" placeholder="Ex: Rodapé"></label>
+
+        ${tipo==='checklist'?`
         <label class="field"><span class="lbl">Responsável</span><input type="text" id="f-responsavel" value="${escapeHtml(item?.responsavel||'')}" placeholder="Ex: CH3, elétrica, pintura"></label>
 
         <label class="field"><span class="lbl">Prioridade</span>
@@ -1561,9 +1624,11 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
         </label>
 
         <label class="field"><span class="lbl">Prazo</span><input type="date" id="f-prazo" value="${item?.prazo||''}"></label>
+        `:''}
+
         <label class="field"><span class="lbl">Descrição do problema</span><textarea id="f-descricao">${escapeHtml(item?.descricao||'')}</textarea></label>
 
-        ${mode==='edit'?`
+        ${mode==='edit' && tipo==='checklist'?`
         <label class="field"><span class="lbl">Status</span>
           <div class="status-row" id="status-row">
             <button type="button" class="status-pill" data-s="pendente">Pendente</button>
@@ -1571,9 +1636,11 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
             <button type="button" class="status-pill" data-s="concluido">Concluído</button>
           </div>
         </label>
+        `:''}
+        ${mode==='edit'?`
         <div class="photo-box" id="photo-depois-box">
           <span style="font-size:22px;">&#9989;</span>
-          <span class="cta">${item?.fotoDepois?'Trocar foto de comprovação':'Foto de comprovação (opcional)'}</span>
+          <span class="cta">${item?.fotoDepois?'Trocar foto':fotoDepoisLabel}</span>
         </div>
         <input type="file" id="input-foto-depois" accept="image/*" capture="environment">
         `:''}
@@ -1618,7 +1685,7 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
     paintPhotoBox(qs('#photo-antes-box',overlay),fotoAntesBlob,'Tirar foto do problema',(novo)=>{ fotoAntesBlob=novo; repaintFotoAntes(); });
   }
   function repaintFotoDepois(){
-    paintPhotoBox(qs('#photo-depois-box',overlay),fotoDepoisBlob,'Foto de comprovação (opcional)',(novo)=>{ fotoDepoisBlob=novo; repaintFotoDepois(); });
+    paintPhotoBox(qs('#photo-depois-box',overlay),fotoDepoisBlob,fotoDepoisLabel,(novo)=>{ fotoDepoisBlob=novo; repaintFotoDepois(); });
   }
   function paintPriority(){
     qsa('.priority-pill',overlay).forEach(p=>{
@@ -1628,13 +1695,13 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
   function paintStatus(){
     qsa('.status-pill',overlay).forEach(p=>p.classList.toggle('active',p.dataset.s===status));
   }
-  paintPriority();
-  if(mode==='edit'){ paintStatus(); repaintFotoDepois(); }
+  if(tipo==='checklist') paintPriority();
+  if(mode==='edit'){ if(tipo==='checklist') paintStatus(); repaintFotoDepois(); }
   repaintFotoAntes();
 
   qs('#sheet-close',overlay).addEventListener('click',closeSheet);
   qsa('.priority-pill',overlay).forEach(p=>p.addEventListener('click',()=>{ priority=p.dataset.p; paintPriority(); }));
-  if(mode==='edit'){
+  if(mode==='edit' && tipo==='checklist'){
     qsa('.status-pill',overlay).forEach(p=>p.addEventListener('click',()=>{ status=p.dataset.s; paintStatus(); }));
   }
   qs('#photo-antes-box',overlay).addEventListener('click',()=>qs('#input-foto-antes',overlay).click());
@@ -1655,7 +1722,7 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
       }
     });
     qs('#btn-delete',overlay).addEventListener('click',async ()=>{
-      if(confirm('Excluir este item do checklist?')){
+      if(confirm('Excluir este item?')){
         await dbDelete('itens',item.id);
         closeSheet();
         if(wrap && wrap._reloadPins) wrap._reloadPins();
@@ -1672,31 +1739,37 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
   qs('#btn-save-item',overlay).addEventListener('click',async ()=>{
     const ambiente=qs('#f-ambiente',overlay).value.trim();
     const tema=qs('#f-tema',overlay).value.trim();
-    const responsavel=qs('#f-responsavel',overlay).value.trim();
-    const prazo=qs('#f-prazo',overlay).value;
     const descricao=qs('#f-descricao',overlay).value.trim();
+    const responsavel = tipo==='checklist' ? qs('#f-responsavel',overlay).value.trim() : '';
+    const prazo = tipo==='checklist' ? qs('#f-prazo',overlay).value : '';
 
     if(mode==='create' && !fotoAntesBlob){ alert('Tire uma foto do problema antes de salvar.'); return; }
     if(!ambiente || !tema){ alert('Preencha pelo menos ambiente e tema.'); return; }
 
     if(mode==='create'){
-      const existentes=await dbGetAllByIndex('itens','pavimentoId',pav.id);
+      const existentes=(await dbGetAllByIndex('itens','pavimentoId',pav.id)).filter(it=>normalizeTipo(it.tipo)===tipo);
       const numero=existentes.reduce((m,it)=>Math.max(m,it.numero||0),0)+1;
       const record={
-        id:uid(), pavimentoId:pav.id, obraId:obraId, numero,
+        id:uid(), pavimentoId:pav.id, obraId:obraId, numero, tipo,
         xPct:pctForNew.xPct, yPct:pctForNew.yPct,
         fotoAntes:fotoAntesBlob, fotoDepois:null,
-        ambiente,tema,responsavel,prioridade:priority,prazo,descricao,
-        status:'pendente', criadoEm:new Date().toISOString(), concluidoEm:null,
+        ambiente,tema,descricao,
+        criadoEm:new Date().toISOString(),
       };
+      if(tipo==='checklist'){
+        record.responsavel=responsavel; record.prioridade=priority; record.prazo=prazo;
+        record.status='pendente'; record.concluidoEm=null;
+      }
       await dbPut('itens',record);
     } else {
-      item.ambiente=ambiente; item.tema=tema; item.responsavel=responsavel;
-      item.prazo=prazo; item.descricao=descricao; item.prioridade=priority;
+      item.ambiente=ambiente; item.tema=tema; item.descricao=descricao;
       item.fotoAntes=fotoAntesBlob; item.fotoDepois=fotoDepoisBlob;
-      if(status==='concluido' && item.status!=='concluido') item.concluidoEm=new Date().toISOString();
-      if(status!=='concluido') item.concluidoEm=null;
-      item.status=status;
+      if(tipo==='checklist'){
+        item.responsavel=responsavel; item.prazo=prazo; item.prioridade=priority;
+        if(status==='concluido' && item.status!=='concluido') item.concluidoEm=new Date().toISOString();
+        if(status!=='concluido') item.concluidoEm=null;
+        item.status=status;
+      }
       await dbPut('itens',item);
     }
     closeSheet();
@@ -1705,12 +1778,12 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange){
   });
 }
 
-function drawPinsOnCanvas(canvas,itens){
+function drawPinsOnCanvas(canvas,itens,tipo){
   const ctx=canvas.getContext('2d');
   const r=Math.max(13,canvas.width*0.011);
   itens.forEach(it=>{
     const x=(it.xPct/100)*canvas.width, y=(it.yPct/100)*canvas.height;
-    const color=it.status==='pendente'?'#D64545':it.status==='andamento'?'#E3A008':'#2F9E58';
+    const color = tipo==='entrada' ? '#2B5C8A' : (it.status==='pendente'?'#D64545':it.status==='andamento'?'#E3A008':'#2F9E58');
     ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
     ctx.fillStyle=color; ctx.fill();
     ctx.lineWidth=Math.max(2,r*0.16); ctx.strokeStyle='#fff'; ctx.stroke();
@@ -1720,7 +1793,9 @@ function drawPinsOnCanvas(canvas,itens){
   });
 }
 
-async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
+async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText,tipo){
+  tipo=normalizeTipo(tipo);
+  const isChecklist=tipo==='checklist';
   const porPavimento={};
   itens.forEach(it=>{ (porPavimento[it.pavimentoId]=porPavimento[it.pavimentoId]||[]).push(it); });
   const pavimentosComItens=pavimentos.filter(p=>porPavimento[p.id]&&porPavimento[p.id].length);
@@ -1728,12 +1803,15 @@ async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
   const planImages=[];
   for(const p of pavimentosComItens){
     const canvas=await renderPavimentoCanvas(p,1400);
-    drawPinsOnCanvas(canvas,porPavimento[p.id]);
+    drawPinsOnCanvas(canvas,porPavimento[p.id],tipo);
     planImages.push({nome:p.nome,dataUrl:canvas.toDataURL('image/png')});
   }
 
   const counts={pendente:0,andamento:0,concluido:0};
   itens.forEach(it=>{ counts[it.status]=(counts[it.status]||0)+1; });
+  const totalLinha = isChecklist
+    ? `${itens.length} (${counts.pendente} pendente, ${counts.andamento} andamento, ${counts.concluido} concluído)`
+    : `${itens.length} item${itens.length===1?'':'s'} registrado${itens.length===1?'':'s'}`;
 
   const plansHtml=planImages.map(pi=>`
     <div class="rep-plan-block">
@@ -1744,17 +1822,26 @@ async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
   const cardsHtml=itens.map(it=>{
     const fotoUrl=it.fotoAntes?URL.createObjectURL(it.fotoAntes):'';
     const statusLabel=it.status==='pendente'?'Pendente':(it.status==='andamento'?'Em andamento':'Concluído');
-    return `<div class="rep-card">
-      <div class="rep-card-photo">${fotoUrl?`<img src="${fotoUrl}">`:'<div class="rep-card-noimg">Sem foto</div>'}</div>
-      <div class="rep-resp-badge">${escapeHtml(it.responsavel||'Sem responsável')}</div>
-      <div class="rep-card-body">
+    const respBadgeHtml = isChecklist ? `<div class="rep-resp-badge">${escapeHtml(it.responsavel||'Sem responsável')}</div>` : '';
+    const topRowHtml = isChecklist ? `
         <div class="rep-card-top">
           <span class="rep-pin-badge status-${it.status}">${it.numero}</span>
           <span class="priority-chip ${normalizePrioridade(it.prioridade)}">${labelPrioridade(it.prioridade)}</span>
           <span class="rep-status-label">${statusLabel}</span>
-        </div>
+        </div>` : `
+        <div class="rep-card-top">
+          <span class="rep-pin-badge status-entrada">${it.numero}</span>
+        </div>`;
+    const metaHtml = isChecklist
+      ? `<p class="rep-card-meta">${escapeHtml(pavNome[it.pavimentoId]||'—')}${it.prazo?' · Prazo '+fmtDate(it.prazo):''}</p>`
+      : `<p class="rep-card-meta">${escapeHtml(pavNome[it.pavimentoId]||'—')}</p>`;
+    return `<div class="rep-card">
+      <div class="rep-card-photo">${fotoUrl?`<img src="${fotoUrl}">`:'<div class="rep-card-noimg">Sem foto</div>'}</div>
+      ${respBadgeHtml}
+      <div class="rep-card-body">
+        ${topRowHtml}
         <p class="rep-card-title">${escapeHtml(it.ambiente)} · ${escapeHtml(it.tema)}</p>
-        <p class="rep-card-meta">${escapeHtml(pavNome[it.pavimentoId]||'—')}${it.prazo?' · Prazo '+fmtDate(it.prazo):''}</p>
+        ${metaHtml}
         <p class="rep-card-desc">${escapeHtml(it.descricao||'—')}</p>
       </div>
     </div>`;
@@ -1762,6 +1849,9 @@ async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
 
   const emissao=new Date().toLocaleDateString('pt-BR');
   const logoB64=document.getElementById('ch3-logo-b64').textContent.trim();
+  const doctypeText = isChecklist
+    ? 'Checklist de entrega de obra · vistoria'
+    : 'Vistoria de entrada · registro de condições iniciais';
 
   let old=document.getElementById('print-root');
   if(old) old.remove();
@@ -1774,14 +1864,14 @@ async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
         <div class="rep-header-mid">
           <p class="rep-obra-nome">${escapeHtml(obra.nome)}</p>
           <p class="rep-obra-sub">${escapeHtml(obra.edificio||'')}</p>
-          <p class="rep-doctype">Checklist de entrega de obra · vistoria${filterSummaryText?(' · '+escapeHtml(filterSummaryText)):''}</p>
+          <p class="rep-doctype">${doctypeText}${filterSummaryText?(' · '+escapeHtml(filterSummaryText)):''}</p>
         </div>
         <div class="rep-header-right">Emitido em<br>${emissao}</div>
       </div>
       <hr class="rep-rule">
       <div class="rep-info-grid">
         <div><span class="k">Endereço</span><span class="v">${escapeHtml(obra.endereco||'—')}</span></div>
-        <div><span class="k">Total de itens</span><span class="v">${itens.length} (${counts.pendente} pendente, ${counts.andamento} andamento, ${counts.concluido} concluído)</span></div>
+        <div><span class="k">Total de itens</span><span class="v">${totalLinha}</span></div>
         <div><span class="k">Eng. coordenador</span><span class="v">${escapeHtml(obra.engCoordenador||'—')}</span></div>
         <div><span class="k">Eng. residente</span><span class="v">${escapeHtml(obra.engResidente||'—')}</span></div>
       </div>
@@ -1880,7 +1970,8 @@ async function gerarRelatorio(obra,pavimentos,pavNome,itens,filterSummaryText){
   }
 }
 
-async function gerarRelatorioInterativo(obra,pavimentos,pavNome,itens,filterSummaryText){
+async function gerarRelatorioInterativo(obra,pavimentos,pavNome,itens,filterSummaryText,tipo){
+  tipo=normalizeTipo(tipo);
   const porPavimento={};
   itens.forEach(it=>{ (porPavimento[it.pavimentoId]=porPavimento[it.pavimentoId]||[]).push(it); });
   const pavimentosComItens=pavimentos.filter(p=>porPavimento[p.id]&&porPavimento[p.id].length);
@@ -1908,14 +1999,14 @@ async function gerarRelatorioInterativo(obra,pavimentos,pavNome,itens,filterSumm
 
   const reportData={
     obra:{nome:obra.nome,edificio:obra.edificio||'',endereco:obra.endereco||'',engCoordenador:obra.engCoordenador||'',engResidente:obra.engResidente||''},
-    filterSummary:filterSummaryText||'',
+    tipo, filterSummary:filterSummaryText||'',
     emissao:new Date().toLocaleDateString('pt-BR'),
     counts, pavimentos:pavData, itens:itensData,
     logoB64:document.getElementById('ch3-logo-b64').textContent.trim(),
   };
   let dataJson=JSON.stringify(reportData).replace(/<\/script/gi,'<\\/script');
 
-  const htmlOut=buildInteractiveReportHtml(dataJson);
+  const htmlOut=buildInteractiveReportHtml(dataJson,tipo);
   const blob=new Blob([htmlOut],{type:'text/html'});
   const fileName='relatorio_interativo_'+(obra.nome||'obra').replace(/[^a-z0-9]+/gi,'_')+'.html';
   const file=new File([blob],fileName,{type:'text/html'});
@@ -1940,7 +2031,8 @@ async function gerarRelatorioInterativo(obra,pavimentos,pavNome,itens,filterSumm
   }
 }
 
-function buildInteractiveReportHtml(dataJson){
+function buildInteractiveReportHtml(dataJson,tipo){
+  const isChecklist = tipo==='checklist';
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1977,6 +2069,7 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
 .pin[data-status="pendente"]{background:var(--pendente);}
 .pin[data-status="andamento"]{background:var(--andamento);}
 .pin[data-status="concluido"]{background:var(--concluido);}
+.pin[data-status="entrada"]{background:var(--blueprint);}
 .viewer-hud{position:absolute;top:calc(10px + var(--safe-top));right:10px;z-index:5;}
 .hud-btn{width:38px;height:38px;border-radius:10px;background:rgba(29,36,48,.78);color:#fff;border:none;font-size:16px;display:flex;align-items:center;justify-content:center;}
 .legend{position:absolute;left:10px;bottom:calc(10px + var(--safe-bottom));background:rgba(29,36,48,.78);border-radius:10px;padding:7px 9px;display:flex;gap:9px;z-index:5;}
@@ -2000,6 +2093,7 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
 .card-top{display:flex;align-items:center;gap:5px;margin-bottom:4px;}
 .pin-badge{width:17px;height:17px;border-radius:50%;color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .pin-badge.status-pendente{background:var(--pendente);} .pin-badge.status-andamento{background:var(--andamento);} .pin-badge.status-concluido{background:var(--concluido);}
+.pin-badge.status-entrada{background:var(--blueprint-dark);}
 .priority-chip{font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;}
 .priority-chip.baixo{background:#DCEFDD;color:#2E6B41;} .priority-chip.medio{background:#FBE3C7;color:#95601A;} .priority-chip.alto{background:#F6D3D3;color:#A13636;}
 .status-label{font-size:9px;color:var(--muted);font-weight:700;}
@@ -2047,9 +2141,13 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
     <div class="hint"><span id="hint-text">Arraste e belisque para navegar · toque num pino para ver o item</span></div>
     <div class="viewer-hud"><button class="hud-btn" id="btn-show-list" title="Ver lista">&#9776;</button></div>
     <div class="legend">
+      ${isChecklist?`
       <div class="li"><span class="dot" style="background:var(--pendente)"></span>Pendente</div>
       <div class="li"><span class="dot" style="background:var(--andamento)"></span>Andamento</div>
       <div class="li"><span class="dot" style="background:var(--concluido)"></span>Concluído</div>
+      `:`
+      <div class="li"><span class="dot" style="background:var(--blueprint)"></span>Vistoria de entrada</div>
+      `}
     </div>
   </div>
 </div>
@@ -2057,6 +2155,7 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
 <div class="screen" id="screen-lista">
   <div class="filter-bar">
     <select id="f-ambiente"></select>
+    ${isChecklist?`
     <select id="f-status">
       <option value="">Todos os status</option>
       <option value="pendente">Pendente</option>
@@ -2069,6 +2168,7 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
       <option value="medio">Médio</option>
       <option value="alto">Alto</option>
     </select>
+    `:''}
   </div>
   <div class="search-row"><input type="text" id="f-busca" placeholder="Buscar por ambiente, tema ou descrição"></div>
   <div class="summary-line" id="summary-line"></div>
@@ -2079,13 +2179,14 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
 
 <script>
 const DATA = ${dataJson};
+const isChecklist = DATA.tipo === 'checklist';
 
 function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function labelPrioridade(p){ return p==='baixo'?'Baixo':(p==='medio'?'Médio':'Alto'); }
 function labelStatus(s){ return s==='pendente'?'Pendente':(s==='andamento'?'Em andamento':'Concluído'); }
 
 document.getElementById('tb-title').textContent=DATA.obra.nome;
-document.getElementById('tb-sub').textContent=[DATA.obra.edificio, DATA.filterSummary].filter(Boolean).join(' · ');
+document.getElementById('tb-sub').textContent=[(isChecklist?'Checklist de Obra':'Vistoria de Entrada'), DATA.obra.edificio, DATA.filterSummary].filter(Boolean).join(' · ');
 
 const pavNomeMap={}; DATA.pavimentos.forEach(p=>pavNomeMap[p.id]=p.nome);
 let currentPavId = DATA.pavimentos[0] ? DATA.pavimentos[0].id : null;
@@ -2134,7 +2235,7 @@ function loadViewer(){
   stageContent.style.width=pav.width+'px';
   stageContent.style.height=pav.height+'px';
   pinsLayer.innerHTML = DATA.itens.filter(it=>it.pavimentoId===currentPavId).map(it=>
-    '<div class="pin" data-status="'+it.status+'" data-item="'+it.id+'" style="left:'+it.xPct+'%;top:'+it.yPct+'%;">'+it.numero+'</div>'
+    '<div class="pin" data-status="'+(isChecklist?it.status:'entrada')+'" data-item="'+it.id+'" style="left:'+it.xPct+'%;top:'+it.yPct+'%;">'+it.numero+'</div>'
   ).join('');
   Array.from(pinsLayer.querySelectorAll('.pin')).forEach(p=>{
     p.addEventListener('pointerdown', e=>e.stopPropagation());
@@ -2213,8 +2314,8 @@ document.getElementById('f-ambiente').innerHTML = '<option value="">Todos os amb
 
 function applyFilters(){
   const ambiente=document.getElementById('f-ambiente').value;
-  const status=document.getElementById('f-status').value;
-  const prio=document.getElementById('f-prio').value;
+  const status=isChecklist?document.getElementById('f-status').value:'';
+  const prio=isChecklist?document.getElementById('f-prio').value:'';
   const busca=document.getElementById('f-busca').value.trim().toLowerCase();
   return DATA.itens.filter(it=>{
     if(ambiente && it.ambiente!==ambiente) return false;
@@ -2229,10 +2330,14 @@ function applyFilters(){
 }
 function renderList(){
   const filtered=applyFilters();
-  const counts={pendente:0,andamento:0,concluido:0};
-  filtered.forEach(it=>{ counts[it.status]=(counts[it.status]||0)+1; });
-  document.getElementById('summary-line').textContent =
-    filtered.length+' itens · '+counts.pendente+' pendente(s) · '+counts.andamento+' em andamento · '+counts.concluido+' concluído(s)';
+  if(isChecklist){
+    const counts={pendente:0,andamento:0,concluido:0};
+    filtered.forEach(it=>{ counts[it.status]=(counts[it.status]||0)+1; });
+    document.getElementById('summary-line').textContent =
+      filtered.length+' itens · '+counts.pendente+' pendente(s) · '+counts.andamento+' em andamento · '+counts.concluido+' concluído(s)';
+  } else {
+    document.getElementById('summary-line').textContent = filtered.length+' item(ns) registrado(s)';
+  }
 
   const grid=document.getElementById('cards-grid');
   if(filtered.length===0){
@@ -2243,22 +2348,24 @@ function renderList(){
   grid.innerHTML = filtered.map(it=>
     '<div class="card" data-item="'+it.id+'">'+
       '<div class="card-photo">'+(it.fotoAntesDataUrl?'<img src="'+it.fotoAntesDataUrl+'">':'<div class="noimg">Sem foto</div>')+'</div>'+
-      '<div class="resp-badge">'+esc(it.responsavel||'Sem responsável')+'</div>'+
+      (isChecklist?'<div class="resp-badge">'+esc(it.responsavel||'Sem responsável')+'</div>':'')+
       '<div class="card-body">'+
         '<div class="card-top">'+
-          '<span class="pin-badge status-'+it.status+'">'+it.numero+'</span>'+
-          '<span class="priority-chip '+it.prioridade+'">'+labelPrioridade(it.prioridade)+'</span>'+
-          '<span class="status-label">'+labelStatus(it.status)+'</span>'+
+          (isChecklist
+            ? '<span class="pin-badge status-'+it.status+'">'+it.numero+'</span>'+
+              '<span class="priority-chip '+it.prioridade+'">'+labelPrioridade(it.prioridade)+'</span>'+
+              '<span class="status-label">'+labelStatus(it.status)+'</span>'
+            : '<span class="pin-badge status-entrada">'+it.numero+'</span>')+
         '</div>'+
         '<p class="card-title">'+esc(it.ambiente)+' · '+esc(it.tema)+'</p>'+
-        '<p class="card-meta">'+esc(pavNomeMap[it.pavimentoId]||'')+(it.prazo?' · Prazo '+esc(it.prazo):'')+'</p>'+
+        '<p class="card-meta">'+esc(pavNomeMap[it.pavimentoId]||'')+(isChecklist && it.prazo?' · Prazo '+esc(it.prazo):'')+'</p>'+
         '<p class="card-desc">'+esc(it.descricao||'—')+'</p>'+
       '</div>'+
     '</div>'
   ).join('');
   Array.from(grid.querySelectorAll('.card')).forEach(card=>card.addEventListener('click',()=>openModal(card.dataset.item)));
 }
-['f-ambiente','f-status','f-prio'].forEach(id=>document.getElementById(id).addEventListener('change',renderList));
+(isChecklist?['f-ambiente','f-status','f-prio']:['f-ambiente']).forEach(id=>document.getElementById(id).addEventListener('change',renderList));
 document.getElementById('f-busca').addEventListener('input',renderList);
 
 function openModal(itemId){
@@ -2266,22 +2373,27 @@ function openModal(itemId){
   const root=document.getElementById('modal-root');
   const overlay=document.createElement('div');
   overlay.className='modal-overlay';
+  const topHtml = isChecklist
+    ? '<span class="pin-badge status-'+it.status+'">'+it.numero+'</span>'+
+      '<span class="priority-chip '+it.prioridade+'">'+labelPrioridade(it.prioridade)+'</span>'+
+      '<span class="status-label">'+labelStatus(it.status)+'</span>'
+    : '<span class="pin-badge status-entrada">'+it.numero+'</span>';
+  const metaHtml = isChecklist
+    ? esc(pavNomeMap[it.pavimentoId]||'')+' · Responsável: '+esc(it.responsavel||'—')+(it.prazo?' · Prazo '+esc(it.prazo):'')
+    : esc(pavNomeMap[it.pavimentoId]||'');
+  const mostrarFotoDepois = isChecklist ? (it.status==='concluido' && it.fotoDepoisDataUrl) : !!it.fotoDepoisDataUrl;
   overlay.innerHTML =
     '<div class="modal-sheet">'+
       '<div class="modal-handle"></div>'+
       '<button class="modal-close">&#10005;</button>'+
       '<div class="modal-body">'+
         (it.fotoAntesDataUrl?'<div class="modal-photo"><img src="'+it.fotoAntesDataUrl+'"></div>':'')+
-        '<div class="modal-top">'+
-          '<span class="pin-badge status-'+it.status+'">'+it.numero+'</span>'+
-          '<span class="priority-chip '+it.prioridade+'">'+labelPrioridade(it.prioridade)+'</span>'+
-          '<span class="status-label">'+labelStatus(it.status)+'</span>'+
-        '</div>'+
+        '<div class="modal-top">'+topHtml+'</div>'+
         '<p class="modal-title">'+esc(it.ambiente)+' · '+esc(it.tema)+'</p>'+
-        '<p class="modal-meta">'+esc(pavNomeMap[it.pavimentoId]||'')+' · Responsável: '+esc(it.responsavel||'—')+(it.prazo?' · Prazo '+esc(it.prazo):'')+'</p>'+
+        '<p class="modal-meta">'+metaHtml+'</p>'+
         '<p class="modal-desc">'+esc(it.descricao||'—')+'</p>'+
-        (it.status==='concluido' && it.fotoDepoisDataUrl ?
-          '<p class="modal-section-label">Foto de conclusão</p><div class="modal-photo"><img src="'+it.fotoDepoisDataUrl+'"></div>' : '')+
+        (mostrarFotoDepois ?
+          '<p class="modal-section-label">'+(isChecklist?'Foto de conclusão':'Foto após resolução')+'</p><div class="modal-photo"><img src="'+it.fotoDepoisDataUrl+'"></div>' : '')+
       '</div>'+
     '</div>';
   root.appendChild(overlay);
@@ -2301,6 +2413,7 @@ renderList();
 /* ---------- RELATÓRIO / FILTRO (pré-visualização) ---------- */
 async function renderRelatorioPreview(params){
   const obra=await dbGet('obras',params.obraId);
+  const tipo=normalizeTipo(params.tipo);
   const pavimentos=await dbGetAllByIndex('pavimentos','obraId',params.obraId);
   pavimentos.sort((a,b)=>(a.ordem||0)-(b.ordem||0));
   const pavNome={}; pavimentos.forEach(p=>pavNome[p.id]=p.nome);
@@ -2311,19 +2424,23 @@ async function renderRelatorioPreview(params){
   let todosItens = escopoUnico
     ? await dbGetAllByIndex('itens','pavimentoId',params.pavimentoId)
     : await dbGetAllByIndex('itens','obraId',params.obraId);
+  todosItens = todosItens.filter(it=>normalizeTipo(it.tipo)===tipo);
   todosItens.sort((a,b)=>(pavNome[a.pavimentoId]||'').localeCompare(pavNome[b.pavimentoId]||'')||a.numero-b.numero);
 
   const responsaveis=[...new Set(todosItens.map(i=>i.responsavel).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const ambientes=[...new Set(todosItens.map(i=>i.ambiente).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const isChecklist = tipo==='checklist';
 
   app.innerHTML=`
-    ${topbar(obra.nome, escopoUnico?('Pavimento: '+(pavAtual?pavAtual.nome:'')+' · relatório'):'Pré-visualização do relatório')}
+    ${topbar(obra.nome, (escopoUnico?('Pavimento: '+(pavAtual?pavAtual.nome:'')+' · '):'')+labelTipo(tipo))}
     <div class="filter-bar">
       ${escopoUnico?'':`<select id="f-pav"><option value="">Todos os pavimentos</option>${pavimentos.map(p=>`<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join('')}</select>`}
       <select id="f-ambiente"><option value="">Todos os ambientes</option>${ambientes.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')}</select>
+      ${isChecklist?`
       <select id="f-resp"><option value="">Todos os responsáveis</option>${responsaveis.map(r=>`<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}</select>
       <select id="f-status"><option value="">Todos os status</option><option value="pendente">Pendente</option><option value="andamento">Andamento</option><option value="concluido">Concluído</option></select>
       <select id="f-prio"><option value="">Toda prioridade</option><option value="baixo">Baixo</option><option value="medio">Médio</option><option value="alto">Alto</option></select>
+      `:''}
     </div>
     <div class="search-row"><input type="text" id="f-busca" placeholder="Buscar por ambiente, tema ou descrição"></div>
     <div class="summary-bar" id="summary-bar"></div>
@@ -2339,8 +2456,10 @@ async function renderRelatorioPreview(params){
 
   function applyFilters(){
     const pav=escopoUnico?'':qs('#f-pav').value;
-    const ambiente=qs('#f-ambiente').value, resp=qs('#f-resp').value, status=qs('#f-status').value,
-          prio=qs('#f-prio').value, busca=qs('#f-busca').value.trim().toLowerCase();
+    const ambiente=qs('#f-ambiente').value, busca=qs('#f-busca').value.trim().toLowerCase();
+    const resp = isChecklist ? qs('#f-resp').value : '';
+    const status = isChecklist ? qs('#f-status').value : '';
+    const prio = isChecklist ? qs('#f-prio').value : '';
     return todosItens.filter(it=>{
       if(pav && it.pavimentoId!==pav) return false;
       if(ambiente && it.ambiente!==ambiente) return false;
@@ -2358,12 +2477,16 @@ async function renderRelatorioPreview(params){
   function renderList(){
     clearRevoked();
     const filtered=applyFilters();
-    const counts={pendente:0,andamento:0,concluido:0};
-    filtered.forEach(it=>{ counts[it.status]=(counts[it.status]||0)+1; });
-    qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> item${filtered.length===1?'':'s'}</span>
-      <span>· <span class="status-chip pendente"></span>${counts.pendente} pendente${counts.pendente===1?'':'s'}</span>
-      <span>· <span class="status-chip andamento"></span>${counts.andamento} andamento</span>
-      <span>· <span class="status-chip concluido"></span>${counts.concluido} concluído${counts.concluido===1?'':'s'}</span>`;
+    if(isChecklist){
+      const counts={pendente:0,andamento:0,concluido:0};
+      filtered.forEach(it=>{ counts[it.status]=(counts[it.status]||0)+1; });
+      qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> item${filtered.length===1?'':'s'}</span>
+        <span>· <span class="status-chip pendente"></span>${counts.pendente} pendente${counts.pendente===1?'':'s'}</span>
+        <span>· <span class="status-chip andamento"></span>${counts.andamento} andamento</span>
+        <span>· <span class="status-chip concluido"></span>${counts.concluido} concluído${counts.concluido===1?'':'s'}</span>`;
+    } else {
+      qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> item${filtered.length===1?'':'s'} registrado${filtered.length===1?'':'s'}</span>`;
+    }
 
     const list=qs('#results-list');
     if(filtered.length===0){
@@ -2378,16 +2501,18 @@ async function renderRelatorioPreview(params){
       } else {
         thumbHtml=`<div class="item-thumb-placeholder">&#128247;</div>`;
       }
-      return `<div class="card card-tap item-card" data-item="${it.id}">
-        ${thumbHtml}
-        <div style="flex:1;min-width:0;">
-          <p class="card-title">#${it.numero} · ${escapeHtml(it.ambiente)}</p>
-          <p class="card-sub">${escapeHtml(pavNome[it.pavimentoId]||'—')} · ${escapeHtml(it.tema)}${it.responsavel?' · '+escapeHtml(it.responsavel):''}</p>
+      const chipsHtml = isChecklist ? `
           <div class="chip-row">
             <span class="priority-chip ${normalizePrioridade(it.prioridade)}">${labelPrioridade(it.prioridade)}</span>
             <span class="priority-chip" style="background:var(--paper);color:var(--muted);"><span class="status-chip ${it.status}"></span>${it.status==='pendente'?'Pendente':it.status==='andamento'?'Andamento':'Concluído'}</span>
             ${it.prazo?`<span class="priority-chip" style="background:var(--paper);color:var(--muted);">Prazo ${fmtDate(it.prazo)}</span>`:''}
-          </div>
+          </div>` : '';
+      return `<div class="card card-tap item-card" data-item="${it.id}">
+        ${thumbHtml}
+        <div style="flex:1;min-width:0;">
+          <p class="card-title">#${it.numero} · ${escapeHtml(it.ambiente)}</p>
+          <p class="card-sub">${escapeHtml(pavNome[it.pavimentoId]||'—')} · ${escapeHtml(it.tema)}${isChecklist && it.responsavel?' · '+escapeHtml(it.responsavel):''}</p>
+          ${chipsHtml}
         </div>
       </div>`;
     }).join('');
@@ -2411,14 +2536,17 @@ async function renderRelatorioPreview(params){
     if(escopoUnico){ parts.push('Pavimento: '+(pavAtual?pavAtual.nome:'')); }
     else { const pavId=qs('#f-pav').value; if(pavId) parts.push('Pavimento: '+(pavNome[pavId]||'')); }
     const amb=qs('#f-ambiente').value; if(amb) parts.push('Ambiente: '+amb);
-    const resp=qs('#f-resp').value; if(resp) parts.push('Responsável: '+resp);
-    const status=qs('#f-status').value; if(status) parts.push('Status: '+(status==='pendente'?'Pendente':status==='andamento'?'Andamento':'Concluído'));
-    const prio=qs('#f-prio').value; if(prio) parts.push('Prioridade: '+labelPrioridade(prio));
+    if(isChecklist){
+      const resp=qs('#f-resp').value; if(resp) parts.push('Responsável: '+resp);
+      const status=qs('#f-status').value; if(status) parts.push('Status: '+(status==='pendente'?'Pendente':status==='andamento'?'Andamento':'Concluído'));
+      const prio=qs('#f-prio').value; if(prio) parts.push('Prioridade: '+labelPrioridade(prio));
+    }
     const busca=qs('#f-busca').value.trim(); if(busca) parts.push('Busca: "'+busca+'"');
     return parts.join(' · ');
   }
 
-  qsa(escopoUnico?'#f-ambiente,#f-resp,#f-status,#f-prio':'#f-pav,#f-ambiente,#f-resp,#f-status,#f-prio',app).forEach(sel=>sel.addEventListener('change',renderList));
+  const filterSelectors = (escopoUnico?['#f-ambiente']:['#f-pav','#f-ambiente']).concat(isChecklist?['#f-resp','#f-status','#f-prio']:[]);
+  qsa(filterSelectors.join(','),app).forEach(sel=>sel.addEventListener('change',renderList));
   qs('#f-busca').addEventListener('input',renderList);
   renderList();
 
@@ -2428,7 +2556,7 @@ async function renderRelatorioPreview(params){
     const btn=qs('#btn-gerar-relatorio');
     btn.disabled=true; btn.textContent='Gerando PDF…';
     try{
-      await gerarRelatorio(obra,pavimentos,pavNome,filtered,buildFilterSummary());
+      await gerarRelatorio(obra,pavimentos,pavNome,filtered,buildFilterSummary(),tipo);
     } finally {
       btn.disabled=false; btn.textContent='Enviar PDF';
     }
@@ -2440,7 +2568,7 @@ async function renderRelatorioPreview(params){
     const btn=qs('#btn-gerar-html');
     btn.disabled=true; btn.textContent='Gerando…';
     try{
-      await gerarRelatorioInterativo(obra,pavimentos,pavNome,filtered,buildFilterSummary());
+      await gerarRelatorioInterativo(obra,pavimentos,pavNome,filtered,buildFilterSummary(),tipo);
     } finally {
       btn.disabled=false; btn.textContent='Relatório interativo';
     }
