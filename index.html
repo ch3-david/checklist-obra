@@ -202,6 +202,23 @@ label.field .lbl{display:block;font-family:var(--font-mono);font-size:var(--fs-1
 .tab:disabled,.tab-add:disabled{opacity:.4;}
 .foot-actions{display:flex;gap:8px;margin-bottom:6px;}
 .foot-actions .btn{flex:1;width:auto;padding:10px 8px;font-size:var(--fs-3);}
+.dest-row{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;background:#fff;border:1.5px solid var(--line-strong);border-radius:var(--r-md);padding:10px 12px;min-height:56px;margin-bottom:8px;color:var(--ink);}
+.dest-row .dn{font-size:var(--fs-4);font-weight:600;}
+.dest-row .ds{font-size:var(--fs-2);color:var(--muted);}
+.dest-row.atual{border-color:var(--ink);background:var(--wash);}
+.dest-row:disabled{opacity:.45;}
+[hidden]{display:none!important;}
+.sel-box{width:22px;height:22px;border-radius:var(--r-xs);border:1.5px solid var(--line-strong);background:#fff;flex-shrink:0;margin-top:15px;position:relative;}
+.sel-box.on{background:var(--blueprint);border-color:var(--blueprint);}
+.sel-box.on::after{content:"";position:absolute;left:6px;top:2px;width:6px;height:11px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(40deg);}
+.item-card.sel-on{background:var(--wash);}
+.sel-foot{display:flex;flex-direction:column;gap:4px;}
+.sel-info{display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:var(--font-mono);font-size:var(--fs-2);color:var(--muted);}
+.summary-bar .sel-toggle{margin:-14px 0 -14px auto;padding:0 6px;min-height:44px;}
+.foot-links{display:flex;gap:8px;align-items:center;margin-bottom:4px;}
+.foot-links .btn{flex:1;width:auto;padding:8px;font-size:var(--fs-3);}
+.ctx-bar{flex-shrink:0;padding:6px var(--sp-4);background:var(--wash);border-bottom:1px solid var(--line);border-left:3px solid var(--gold);font-size:var(--fs-2);color:var(--muted);}
+.ctx-bar b{color:var(--ink);font-weight:600;}
 .sheet-note{margin:0 0 12px;padding:8px 10px;border-left:3px solid var(--gold);background:var(--wash);font-size:var(--fs-2);color:var(--ink);}
 
 /* folhas inferiores */
@@ -938,7 +955,7 @@ function hideSheet(overlay){ if(!overlay || overlay._hiding) return; overlay._hi
 document.addEventListener('keydown',(e)=>{
   if(e.key!=='Escape') return;
   const ovs=Array.from(document.querySelectorAll('.sheet-overlay.in')); const ov=ovs[ovs.length-1];
-  const x=ov && ov.querySelector('#sheet-close,#nm-close,#er-close,#inst-close,#cf-x,#of-x');
+  const x=ov && ov.querySelector('#sheet-close,#nm-close,#er-close,#inst-close,#cf-x,#of-x,#dd-x');
   if(x) x.click();
 });
 
@@ -970,7 +987,7 @@ function confirmSheet(o){
       <div class="sheet-handle"></div>
       <div class="sheet-head"><h2>${escapeHtml(o.titulo)}</h2><button class="icon-btn" id="cf-x" aria-label="Fechar" style="background:transparent;color:var(--ink);">&#10005;</button></div>
       <div class="sheet-body"><p style="font-size:14px;line-height:1.5;color:var(--muted);margin:0 0 6px;">${o.mensagemHtml}</p></div>
-      <div class="sheet-foot"><button class="btn btn-danger-solid" id="cf-ok">${escapeHtml(o.confirmar||'Excluir')}</button><button class="btn btn-ghost" id="cf-no" style="margin-top:8px;">Cancelar</button></div>
+      <div class="sheet-foot"><button class="btn ${o.neutro?'btn-primary':'btn-danger-solid'}" id="cf-ok">${escapeHtml(o.confirmar||'Excluir')}</button><button class="btn btn-ghost" id="cf-no" style="margin-top:8px;">Cancelar</button></div>
     </div>`;
     showSheet(overlay);
     const fim=(v)=>{ hideSheet(overlay); resolve(v); };
@@ -979,6 +996,89 @@ function confirmSheet(o){
     qs('#cf-x',overlay).addEventListener('click',()=>fim(false));
     overlay.addEventListener('click',(e)=>{ if(e.target===overlay) fim(false); });
   });
+}
+
+// ---------- mover itens entre relatórios ----------
+const noDestino=(it,d)=>itemNoContexto(it,d.tipo,d.relatorioId);
+function destinosDaObra(obra){
+  return [
+    {tipo:'entrada',titulo:'Vistoria de Entrada',sub:'Foto, ambiente, tema e descrição'},
+    {tipo:'checklist',titulo:'Checklist de Obra',sub:'Também usa responsável, prioridade, prazo e status'}
+  ].concat((obra.relatoriosOutros||[]).map(r=>({tipo:'outros',relatorioId:r.id,titulo:r.nome,sub:'Relatório "Outros" · também usa responsável, prioridade, prazo e status'})));
+}
+// folha com a lista de relatórios (devolve o destino escolhido ou null)
+function escolherDestino(o){
+  return new Promise(resolve=>{
+    const eAtual=(d)=>!!o.atual && d.tipo===o.atual.tipo && (d.tipo!=='outros' || d.relatorioId===o.atual.relatorioId);
+    const ordem=o.destinos.map((d,i)=>({d,i})).sort((a,b)=>(eAtual(b.d)?1:0)-(eAtual(a.d)?1:0));
+    const overlay=document.createElement('div'); overlay.className='sheet-overlay'; if(o.id) overlay.id=o.id;
+    overlay.setAttribute('role','dialog'); overlay.setAttribute('aria-modal','true');
+    overlay.innerHTML=`<div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head"><h2>${escapeHtml(o.titulo)}</h2><button class="icon-btn" id="dd-x" aria-label="Fechar" style="background:transparent;color:var(--ink);">&#10005;</button></div>
+      <div class="sheet-body">
+        ${o.mensagemHtml?`<p style="font-size:14px;line-height:1.5;color:var(--muted);margin:0 0 12px;">${o.mensagemHtml}</p>`:''}
+        ${ordem.map(({d,i})=>`<button type="button" class="dest-row${eAtual(d)?' atual':''}" data-i="${i}"${o.desabilitar&&o.desabilitar(d)?' disabled':''}><span class="dn">${escapeHtml(d.titulo)}</span><span class="ds">${eAtual(d)?(o.subAtual||'Relatório atual'):escapeHtml(d.sub)}</span></button>`).join('')}
+      </div>
+    </div>`;
+    showSheet(overlay);
+    const fim=(v)=>{ hideSheet(overlay); resolve(v); };
+    qsa('.dest-row',overlay).forEach(b=>b.addEventListener('click',()=>fim(o.destinos[+b.dataset.i])));
+    qs('#dd-x',overlay).addEventListener('click',()=>fim(null));
+    overlay.addEventListener('click',(e)=>{ if(e.target===overlay) fim(null); });
+  });
+}
+function resumoMover(itens,destino,obra){
+  const n=itens.length, nome=escapeHtml(labelTipo(destino.tipo,obra,destino.relatorioId));
+  const deEntrada=itens.filter(it=>normalizeTipo(it.tipo)==='entrada').length;
+  const deCompleto=itens.filter(it=>tipoCompleto(it.tipo)).length;
+  let t=`<b style="color:var(--ink)">${n} ${n===1?'item vai':'itens vão'}</b> para <b style="color:var(--ink)">${nome}</b>.`;
+  if(tipoCompleto(destino.tipo) && deEntrada) t+=`<br><br>${deEntrada===1?'O item vem':'Os '+deEntrada+' itens vêm'} da Vistoria de Entrada e ${deEntrada===1?'entra':'entram'} com responsável e prazo em branco, prioridade Média e status Pendente, para preencher depois.`;
+  if(destino.tipo==='entrada' && deCompleto) t+=`<br><br>Responsável, prioridade, prazo e status deixam de aparecer na Vistoria de Entrada (ficam guardados e voltam se o item for movido de novo).`;
+  t+=`<br><br>Os números mudam para os próximos do destino. Posição na planta e fotos não mudam.`;
+  return t;
+}
+// move os itens: próximos números do destino (por pavimento); nada é apagado
+async function moverItens(itens,destino){
+  const todos=await dbGetAllByIndex('itens','obraId',itens[0].obraId);
+  const maxPav={};
+  todos.filter(it=>noDestino(it,destino)).forEach(it=>{ maxPav[it.pavimentoId]=Math.max(maxPav[it.pavimentoId]||0,it.numero||0); });
+  const ordenados=itens.slice().sort((a,b)=>String(a.pavimentoId).localeCompare(String(b.pavimentoId))||(a.numero-b.numero));
+  const registro=[];
+  for(const it of ordenados){
+    registro.push({id:it.id,tipo:it.tipo,relatorioId:it.relatorioId,numero:it.numero,status:it.status,prioridade:it.prioridade});
+    it.tipo=destino.tipo;
+    if(destino.tipo==='outros') it.relatorioId=destino.relatorioId; else delete it.relatorioId;
+    maxPav[it.pavimentoId]=(maxPav[it.pavimentoId]||0)+1; it.numero=maxPav[it.pavimentoId];
+    if(tipoCompleto(destino.tipo)){ if(!it.status) it.status='pendente'; if(!it.prioridade) it.prioridade='medio'; }
+    await dbPut('itens',it);
+  }
+  return registro;
+}
+async function desfazerMover(registro){
+  for(const r of registro){
+    const it=await dbGet('itens',r.id); if(!it) continue;
+    if(r.tipo===undefined) delete it.tipo; else it.tipo=r.tipo;
+    if(r.relatorioId===undefined) delete it.relatorioId; else it.relatorioId=r.relatorioId;
+    it.numero=r.numero;
+    if(r.status===undefined) delete it.status; else it.status=r.status;
+    if(r.prioridade===undefined) delete it.prioridade; else it.prioridade=r.prioridade;
+    await dbPut('itens',it);
+  }
+}
+// fluxo completo: escolher destino -> resumo -> mover -> aviso com Desfazer (devolve true se moveu)
+async function fluxoMover(itens,obra,depois){
+  const destino=await escolherDestino({titulo:'Mover para…',destinos:destinosDaObra(obra),desabilitar:(d)=>itens.every(it=>noDestino(it,d))});
+  if(!destino) return false;
+  const aMover=itens.filter(it=>!noDestino(it,destino));
+  if(!aMover.length){ toast('Os itens já estão neste relatório.'); return false; }
+  const n=aMover.length;
+  const ok=await confirmSheet({titulo:'Mover '+n+(n===1?' item?':' itens?'),mensagemHtml:resumoMover(aMover,destino,obra),confirmar:'Mover '+n+(n===1?' item':' itens'),neutro:true});
+  if(!ok) return false;
+  const registro=await moverItens(aMover,destino);
+  toast((n===1?'Item movido':n+' itens movidos')+' para '+labelTipo(destino.tipo,obra,destino.relatorioId),{type:'ok',action:'Desfazer',ms:6000,onAction:async()=>{ await desfazerMover(registro); if(depois) await depois(); }});
+  if(depois) await depois();
+  return true;
 }
 
 // erro de campo: borda vermelha, mensagem que expande e uma tremida
@@ -1783,12 +1883,26 @@ async function renderObraDetail(params){
   qs('#btn-relatorio').addEventListener('click',()=>go('relatorio',{obraId:obra.id,tipo:modoAtivo,relatorioId:relCtx}));
   qs('#btn-export').addEventListener('click',()=>exportObra(obra.id));
   qsa('[data-open-pav]').forEach(elm=>elm.addEventListener('click',async ()=>{
-    let relId=relCtx;
+    let relId=relCtx, perguntar=true;
     if(modoAtivo==='outros' && !relId){                 // ainda não existe nenhum relatório: cria o primeiro
       const nome=await pedirNomeOutros(''); if(!nome) return;
       const rel={id:uid(),nome,criadoEm:new Date().toISOString()};
       obra.relatoriosOutros=(obra.relatoriosOutros||[]).concat([rel]); obra.relatorioAtivoId=rel.id;
-      await dbPut('obras',obra); relId=rel.id;
+      await dbPut('obras',obra); relId=rel.id; perguntar=false;
+    }
+    // pavimento ainda sem itens neste relatório: confirma antes de criar (evita criar no relatório errado)
+    const pavId=elm.dataset.openPav;
+    const jaTem=todosItens.some(it=>it.pavimentoId===pavId && itemNoContexto(it,modoAtivo,relId));
+    if(perguntar && !jaTem){
+      const nomeAtual=labelTipo(modoAtivo,obra,relId);
+      const dest=await escolherDestino({id:'dest-criar',titulo:'Criar itens em qual relatório?',
+        mensagemHtml:`Este pavimento ainda não tem itens em <b style="color:var(--ink)">${escapeHtml(nomeAtual)}</b>. Confira o relatório antes de criar.`,
+        destinos:destinosDaObra(obra),atual:{tipo:modoAtivo,relatorioId:relId},subAtual:'Continuar neste relatório'});
+      if(!dest) return;
+      if(dest.tipo!==modoAtivo || (dest.tipo==='outros' && dest.relatorioId!==relId)){
+        if(dest.tipo==='outros'){ relAtivo=dest.relatorioId; obra.relatorioAtivoId=relAtivo; qsa('.rel-row').forEach(r=>{ const s=r.querySelector('[data-sel-rel]'); r.classList.toggle('active',!!s && s.dataset.selRel===relAtivo); }); }
+        obra.modoAtivo=dest.tipo; await dbPut('obras',obra); applyMode(dest.tipo); relId=relCtx;
+      }
     }
     go('plantaViewer',{obraId:obra.id,pavimentoId:elm.dataset.openPav,tipo:modoAtivo,relatorioId:relId});
   }));
@@ -1972,6 +2086,7 @@ async function renderPlantaViewer(params){
   app.innerHTML=`
     ${topbar(obra.nome,pav.nome+' · '+labelTipo(tipo,obra,relatorioId))}
     <div class="tabs">${tabsHtml}</div>
+    <div class="ctx-bar" id="ctx-bar">Criando em: <b>${escapeHtml(labelTipo(tipo,obra,relatorioId))}</b></div>
     <div class="viewer-wrap" id="viewer-wrap">
       <div class="stage" id="stage" style="--zoom:1;">
         <div class="stage-content" id="stage-content">
@@ -2214,7 +2329,7 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange,tipoForNew
         <button class="icon-btn" id="sheet-close" aria-label="Fechar" style="background:transparent;color:var(--ink);">&#10005;</button>
       </div>
       <div class="sheet-body">
-        ${prefill?`<p class="sheet-note">Cópia do item #${prefill._origem}. Informe o ambiente para salvar.</p>`:''}
+        ${mode==='create'?`<p class="sheet-note">Criando em: <b>${escapeHtml(labelTipo(tipo,obraSheet,relId))}</b>${prefill?`<br>Cópia do item #${prefill._origem}. Informe o ambiente para salvar.`:''}</p>`:''}
         <div class="photo-box" id="photo-antes-box">
           <span style="font-size:22px;">&#128247;</span>
           <span class="cta">${base?.fotoAntes?'Trocar foto':'Adicionar foto do problema'}</span>
@@ -2260,7 +2375,7 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange,tipoForNew
         `:''}
       </div>
       <div class="sheet-foot">
-        ${mode==='edit'?`<div class="foot-actions"><button type="button" class="btn btn-ghost" id="btn-duplicar">Duplicar item</button><button type="button" class="btn btn-ghost" id="btn-reposicionar">Reposicionar pino</button></div><button class="btn btn-danger" id="btn-delete" style="width:100%;margin-bottom:4px;">Excluir item</button>`:''}
+        ${mode==='edit'?`<div class="foot-actions"><button type="button" class="btn btn-ghost" id="btn-duplicar">Duplicar item</button><button type="button" class="btn btn-ghost" id="btn-reposicionar">Reposicionar pino</button></div><div class="foot-links"><button type="button" class="btn btn-text" id="btn-mover">Mover para outro relatório</button><button class="btn btn-danger" id="btn-delete">Excluir item</button></div>`:''}
         <button class="btn btn-primary" id="btn-save-item">${mode==='create'?'Salvar item':'Salvar alterações'}</button>
       </div>
     </div>
@@ -2362,6 +2477,15 @@ async function openPinSheet(mode,itemId,pav,obraId,pctForNew,onChange,tipoForNew
       const cur=navStack[navStack.length-1];
       if(cur && cur.view==='plantaViewer') replace('plantaViewer',p); else go('plantaViewer',p);
     }
+    qs('#btn-mover',overlay).addEventListener('click',async ()=>{
+      await persistEdit();
+      const obraAtual=await dbGet('obras',obraId), fresco=await dbGet('itens',item.id);
+      const moveu=await fluxoMover([fresco],obraAtual,async()=>{
+        if(wrap && wrap.isConnected && wrap._reloadPins) await wrap._reloadPins();
+        if(typeof onChange==='function') await onChange();
+      });
+      if(moveu) closeSheet();
+    });
     qs('#btn-duplicar',overlay).addEventListener('click',()=>irParaPlanta('duplicar'));
     qs('#btn-reposicionar',overlay).addEventListener('click',()=>irParaPlanta('mover'));
     qs('#btn-delete',overlay).addEventListener('click',async ()=>{
@@ -3115,12 +3239,18 @@ async function renderRelatorioPreview(params){
     <div class="search-row"><input type="text" id="f-busca" placeholder="Buscar por ambiente, tema ou descrição"></div>
     <div class="summary-bar" id="summary-bar"></div>
     <div class="scroll pad" id="results-list" style="padding-top:0;"></div>
-    <div class="sheet-foot" style="display:flex;gap:8px;">
+    <div class="sheet-foot" id="normal-foot" style="display:flex;gap:8px;">
       <button class="btn btn-primary" id="btn-gerar-relatorio" style="flex:1;">Enviar PDF</button>
       <button class="btn btn-ghost" id="btn-gerar-html" style="flex:1;">Relatório interativo</button>
     </div>
+    <div class="sheet-foot sel-foot" id="sel-foot" hidden>
+      <div class="sel-info"><span id="sel-count" aria-live="polite">0 selecionados</span><button type="button" class="btn-text" id="btn-sel-todos">Selecionar todos</button></div>
+      <button type="button" class="btn btn-primary" id="btn-mover-sel" disabled>Mover…</button>
+    </div>
   `;
 
+  let selecionando=false; const selecionados=new Set();
+  const selBtn=()=>`<button type="button" class="btn-text sel-toggle" id="btn-selecionar">${selecionando?'Cancelar':'Selecionar'}</button>`;
   const revokeUrls=[];
   function clearRevoked(){ revokeUrls.forEach(u=>URL.revokeObjectURL(u)); revokeUrls.length=0; }
 
@@ -3153,14 +3283,16 @@ async function renderRelatorioPreview(params){
       qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> ${filtered.length===1?'item':'itens'}</span>
         <span>· <span class="status-chip pendente"></span>${counts.pendente} pendente${counts.pendente===1?'':'s'}</span>
         <span>· <span class="status-chip andamento"></span>${counts.andamento} andamento</span>
-        <span>· <span class="status-chip concluido"></span>${counts.concluido} concluído${counts.concluido===1?'':'s'}</span>`;
+        <span>· <span class="status-chip concluido"></span>${counts.concluido} concluído${counts.concluido===1?'':'s'}</span>${selBtn()}`;
     } else {
-      qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> ${filtered.length===1?'item':'itens'} registrado${filtered.length===1?'':'s'}</span>`;
+      qs('#summary-bar').innerHTML=`<span><b>${filtered.length}</b> ${filtered.length===1?'item':'itens'} registrado${filtered.length===1?'':'s'}</span>${selBtn()}`;
     }
 
     const list=qs('#results-list');
+    for(const id of Array.from(selecionados)){ if(!filtered.some(i=>i.id===id)) selecionados.delete(id); }   // só fica selecionado o que está visível
     if(filtered.length===0){
       list.classList.remove('stagger');
+      atualizarSelecao();
       list.innerHTML=`<div class="empty fadein"><div class="glyph">${ICON_EMPTY_SEARCH}</div><p>Nenhum item encontrado com esses filtros.</p></div>`;
       return;
     }
@@ -3195,15 +3327,40 @@ async function renderRelatorioPreview(params){
     qsa('[data-item]',list).forEach(cardEl=>cardEl.addEventListener('click',()=>{
       const it=todosItens.find(i=>i.id===cardEl.dataset.item);
       if(!it) return;
-      openPinSheet('edit',it.id,{id:it.pavimentoId},params.obraId,null,()=>{
-        dbGet('itens',it.id).then(updated=>{
-          const idx=todosItens.findIndex(x=>x.id===it.id);
-          if(updated){ if(idx>-1) todosItens[idx]=updated; }
-          else if(idx>-1){ todosItens.splice(idx,1); }
-          renderList();
-        });
-      });
+      if(selecionando){ if(selecionados.has(it.id)) selecionados.delete(it.id); else selecionados.add(it.id); atualizarSelecao(); return; }
+      openPinSheet('edit',it.id,{id:it.pavimentoId},params.obraId,null,recarregar);
     }));
+    atualizarSelecao();
+  }
+
+  // ---- seleção e mover em lote ----
+  function atualizarSelecao(){
+    qsa('[data-item]').forEach(c=>{
+      const on=selecionados.has(c.dataset.item);
+      let box=c.querySelector('.sel-box');
+      if(selecionando && !box){ box=document.createElement('span'); box.className='sel-box'; box.setAttribute('aria-hidden','true'); c.insertBefore(box,c.firstChild); }
+      if(!selecionando && box){ box.remove(); box=null; }
+      if(box) box.classList.toggle('on',on);
+      c.classList.toggle('sel-on',selecionando && on);
+      if(selecionando){ c.setAttribute('role','checkbox'); c.setAttribute('aria-checked',on?'true':'false'); }
+    });
+    const n=selecionados.size, vis=applyFilters();
+    const cnt=qs('#sel-count'); if(cnt) cnt.textContent=n+(n===1?' selecionado':' selecionados');
+    const mv=qs('#btn-mover-sel'); if(mv) mv.disabled=n===0;
+    const todos=vis.length>0 && vis.every(i=>selecionados.has(i.id));
+    const bt=qs('#btn-sel-todos'); if(bt) bt.textContent=todos?'Limpar seleção':'Selecionar todos';
+    const tg=qs('#btn-selecionar'); if(tg) tg.textContent=selecionando?'Cancelar':'Selecionar';
+  }
+  function alternarModoSel(){
+    selecionando=!selecionando; if(!selecionando) selecionados.clear();
+    qs('#normal-foot').hidden=selecionando; qs('#sel-foot').hidden=!selecionando;
+    atualizarSelecao();
+  }
+  async function recarregar(){
+    let itens = escopoUnico ? await dbGetAllByIndex('itens','pavimentoId',params.pavimentoId) : await dbGetAllByIndex('itens','obraId',params.obraId);
+    todosItens = itens.filter(it=>itemNoContexto(it,tipo,relatorioId));
+    todosItens.sort((a,b)=>(pavNome[a.pavimentoId]||'').localeCompare(pavNome[b.pavimentoId]||'')||a.numero-b.numero);
+    renderList();
   }
 
   function buildFilterSummary(){
@@ -3225,6 +3382,17 @@ async function renderRelatorioPreview(params){
   let buscaT=null;
   qs('#f-busca').addEventListener('input',()=>{ clearTimeout(buscaT); buscaT=setTimeout(renderList,180); });
   renderList();
+  qs('#summary-bar').addEventListener('click',(e)=>{ if(e.target.closest('#btn-selecionar')) alternarModoSel(); });
+  qs('#btn-sel-todos').addEventListener('click',()=>{
+    const vis=applyFilters(); const todos=vis.length>0 && vis.every(i=>selecionados.has(i.id));
+    if(todos) selecionados.clear(); else vis.forEach(i=>selecionados.add(i.id));
+    atualizarSelecao();
+  });
+  qs('#btn-mover-sel').addEventListener('click',async ()=>{
+    const itens=[]; for(const id of selecionados){ const it=await dbGet('itens',id); if(it) itens.push(it); }
+    if(!itens.length) return;
+    await fluxoMover(itens,obra,async()=>{ selecionados.clear(); if(selecionando) alternarModoSel(); await recarregar(); });
+  });
 
   qs('#btn-gerar-relatorio').addEventListener('click',async ()=>{
     const filtered=applyFilters();
